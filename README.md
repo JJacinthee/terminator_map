@@ -1,6 +1,6 @@
 # 🌍 全球晨昏线 · 昼夜时长
 
-**在线访问** → [点击打开](https://JJacinthee.github.io/terminator-map/)
+**在线访问** → [点击打开](https://jjacinthee.github.io/terminator_map/)
 
 实时可视化全球任意地点的昼夜状态与时长，适合旅游做攻略、天文爱好者、教学演示使用。
 
