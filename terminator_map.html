@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>全球晨昏线 · 昼夜时长</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/topojson/3.0.2/topojson.min.js"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1923; color: #e0e8f0; height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+
+/* ── Header ── */
+header { padding: 8px 14px; border-bottom: 1px solid #1e2d3d; display: flex; align-items: center; gap: 12px; flex-shrink: 0; flex-wrap: wrap; }
+header h1 { font-size: 14px; font-weight: 500; color: #c8daf0; white-space: nowrap; }
+.search-wrap { position: relative; flex: 1; min-width: 160px; max-width: 320px; }
+.search-wrap input { width: 100%; background: #141f2e; border: 1px solid #1e2d3d; border-radius: 6px; padding: 6px 10px 6px 30px; font-size: 13px; color: #c8daf0; outline: none; }
+.search-wrap input:focus { border-color: #378add; }
+.search-wrap input::placeholder { color: #3a5a7a; }
+.search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: #3a5a7a; font-size: 14px; pointer-events: none; }
+.search-dropdown { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: #141f2e; border: 1px solid #1e2d3d; border-radius: 6px; max-height: 220px; overflow-y: auto; z-index: 200; display: none; }
+.search-dropdown.open { display: block; }
+.search-item { padding: 8px 12px; font-size: 13px; cursor: pointer; border-bottom: 1px solid #1a2535; }
+.search-item:last-child { border-bottom: none; }
+.search-item:hover, .search-item.active { background: #1e2d3d; }
+.search-item .city-cn { color: #c8daf0; }
+.search-item .city-en { color: #5a7a9a; font-size: 11px; margin-left: 6px; }
+.search-item .city-country { color: #3a5a7a; font-size: 11px; float: right; }
+
+/* ── Main layout: desktop side-by-side, mobile stacked ── */
+.main { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+.map-area { flex: 1; display: flex; flex-direction: column; padding: 10px; gap: 8px; min-width: 0; min-height: 0; }
+
+/* ── Controls ── */
+.controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; background: #141f2e; border-radius: 8px; padding: 8px 12px; border: 1px solid #1e2d3d; flex-shrink: 0; }
+.ctrl-group { display: flex; align-items: center; gap: 6px; }
+.ctrl-group label { font-size: 12px; color: #7a9ab8; white-space: nowrap; }
+.ctrl-group input[type=range] { width: 100px; accent-color: #378add; cursor: pointer; }
+.ctrl-group .val { font-size: 13px; font-weight: 500; color: #c8daf0; min-width: 46px; }
+.ctrl-group .val.decl { font-size: 11px; color: #7a9ab8; min-width: 80px; }
+
+/* ── Map ── */
+.map-svg-wrap { flex: 1; min-height: 0; position: relative; }
+#mapSvg { width: 100%; height: 100%; border-radius: 8px; border: 1px solid #1e2d3d; cursor: crosshair; display: block; }
+.legend { display: flex; gap: 10px; font-size: 10px; color: #5a7a9a; align-items: center; flex-wrap: wrap; flex-shrink: 0; }
+.legend-item { display: flex; align-items: center; gap: 3px; }
+.legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+
+/* ── Sidebar: desktop fixed width, mobile bottom drawer ── */
+.sidebar { width: 252px; min-width: 252px; background: #141f2e; border-left: 1px solid #1e2d3d; padding: 12px; display: flex; flex-direction: column; gap: 12px; overflow-y: auto; flex-shrink: 0; }
+.info-card { background: #0f1923; border-radius: 8px; padding: 12px; border: 1px solid #1e2d3d; }
+.info-card h3 { font-size: 11px; color: #5a7a9a; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 10px; }
+.city-title { font-size: 16px; font-weight: 500; color: #c8daf0; margin-bottom: 2px; }
+.city-sub { font-size: 12px; color: #5a7a9a; margin-bottom: 10px; }
+.daynight-bar { display: flex; height: 20px; border-radius: 4px; overflow: hidden; margin-bottom: 8px; }
+.bar-day { background: #378add; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #fff; font-weight: 500; }
+.bar-night { background: #0d1520; display: flex; align-items: center; justify-content: center; font-size: 10px; color: #5a7a9a; font-weight: 500; }
+.stat-row { display: flex; justify-content: space-between; align-items: baseline; padding: 4px 0; border-bottom: 1px solid #1a2535; }
+.stat-row:last-child { border-bottom: none; }
+.stat-label { font-size: 12px; color: #5a7a9a; }
+.stat-val { font-size: 13px; font-weight: 500; color: #c8daf0; }
+.stat-val.hi { color: #f5a623; }
+.hint { font-size: 12px; color: #3a5a7a; text-align: center; padding: 16px 0; line-height: 1.7; }
+
+/* ── 手机端适配 (≤ 640px) ── */
+@media (max-width: 640px) {
+  body { overflow: auto; height: auto; min-height: 100dvh; }
+  header { padding: 8px 10px; gap: 8px; }
+  header h1 { font-size: 13px; }
+  .search-wrap { max-width: 100%; }
+
+  .main { flex-direction: column; overflow: visible; height: auto; }
+
+  .map-area { padding: 6px; gap: 6px; }
+
+  /* 滑块控件：竖排，每组占满宽度 */
+  .controls { flex-direction: column; align-items: stretch; gap: 6px; padding: 8px 10px; }
+  .ctrl-group { justify-content: space-between; }
+  .ctrl-group input[type=range] { flex: 1; width: auto; min-width: 0; margin: 0 8px; }
+  .ctrl-group .val { min-width: 52px; text-align: right; }
+  .ctrl-group .val.decl { min-width: auto; }
+
+  /* 地图固定高度 */
+  .map-svg-wrap { height: 52vw; min-height: 180px; max-height: 260px; flex: none; }
+
+  /* 图例精简 */
+  .legend { gap: 8px; font-size: 10px; }
+  .legend-item:last-child { display: none; } /* 隐藏"点击地图选择地点"提示 */
+
+  /* 侧边栏变为底部卡片 */
+  .sidebar { width: 100%; min-width: 0; border-left: none; border-top: 1px solid #1e2d3d; padding: 10px; flex-shrink: 0; overflow-y: visible; max-height: none; }
+
+  /* 年度图表适配 */
+  #yearCanvas { width: 100% !important; height: 90px !important; }
+}
+
+/* ── 平板端 (641px – 900px) ── */
+@media (min-width: 641px) and (max-width: 900px) {
+  .sidebar { width: 210px; min-width: 210px; }
+  .ctrl-group input[type=range] { width: 85px; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>全球晨昏线 · 昼夜时长</h1>
+  <div class="search-wrap">
+    <span class="search-icon">🔍</span>
+    <input type="text" id="searchInput" placeholder="搜索城市（中文或英文）…" autocomplete="off">
+    <div class="search-dropdown" id="searchDropdown"></div>
+  </div>
+</header>
+
+<div class="main">
+  <div class="map-area">
+    <div class="controls">
+      <div class="ctrl-group">
+        <label>月份</label>
+        <input type="range" id="monthSlider" min="1" max="12" value="2" step="1">
+        <span class="val" id="monthLabel">2月</span>
+      </div>
+      <div class="ctrl-group">
+        <label>日期</label>
+        <input type="range" id="daySlider" min="1" max="31" value="15" step="1">
+        <span class="val" id="dayLabel">15日</span>
+      </div>
+      <div class="ctrl-group">
+        <label>UTC时刻</label>
+        <input type="range" id="hourSlider" min="0" max="23" value="12" step="1">
+        <span class="val" id="hourLabel">12:00</span>
+      </div>
+      <div class="ctrl-group">
+        <span class="val decl" id="declLabel"></span>
+      </div>
+    </div>
+
+    <div class="map-svg-wrap">
+      <svg id="mapSvg" viewBox="0 0 900 460" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:#1e3d2e"></div>白昼陆地</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#060e1a"></div>黑夜区域</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#f5a623"></div>晨昏线</div>
+      <div class="legend-item"><div class="legend-dot" style="background:#FFD700;border-radius:50%"></div>太阳直射点</div>
+      <div class="legend-item" style="margin-left:auto;color:#3a5a7a;">点击地图选择地点</div>
+    </div>
+  </div>
+
+  <div class="sidebar">
+    <div class="info-card" id="locationCard">
+      <h3>选中地点</h3>
+      <div class="hint">← 搜索或点击地图<br>查看该地昼夜时长<br>及全年变化曲线</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 城市数据库（中文名、英文名、国家、纬度、经度）──
+const CITIES = [
+  // 东亚
+  ["北京","Beijing","中国",39.91,116.39],
+  ["上海","Shanghai","中国",31.23,121.47],
+  ["广州","Guangzhou","中国",23.13,113.26],
+  ["深圳","Shenzhen","中国",22.55,114.06],
+  ["成都","Chengdu","中国",30.66,104.07],
+  ["重庆","Chongqing","中国",29.56,106.55],
+  ["武汉","Wuhan","中国",30.58,114.27],
+  ["西安","Xi'an","中国",34.27,108.95],
+  ["杭州","Hangzhou","中国",30.25,120.15],
+  ["南京","Nanjing","中国",32.06,118.78],
+  ["天津","Tianjin","中国",39.14,117.18],
+  ["沈阳","Shenyang","中国",41.80,123.43],
+  ["哈尔滨","Harbin","中国",45.75,126.63],
+  ["长春","Changchun","中国",43.88,125.35],
+  ["济南","Jinan","中国",36.67,116.99],
+  ["郑州","Zhengzhou","中国",34.75,113.62],
+  ["长沙","Changsha","中国",28.23,112.93],
+  ["福州","Fuzhou","中国",26.07,119.30],
+  ["厦门","Xiamen","中国",24.47,118.08],
+  ["昆明","Kunming","中国",25.05,102.70],
+  ["乌鲁木齐","Urumqi","中国",43.83,87.62],
+  ["呼和浩特","Hohhot","中国",40.83,111.65],
+  ["兰州","Lanzhou","中国",36.06,103.79],
+  ["西宁","Xining","中国",36.62,101.78],
+  ["拉萨","Lhasa","中国",29.65,91.13],
+  ["南宁","Nanning","中国",22.82,108.32],
+  ["贵阳","Guiyang","中国",26.58,106.72],
+  ["合肥","Hefei","中国",31.86,117.27],
+  ["南昌","Nanchang","中国",28.68,115.88],
+  ["石家庄","Shijiazhuang","中国",38.04,114.48],
+  ["太原","Taiyuan","中国",37.87,112.55],
+  ["香港","Hong Kong","中国",22.32,114.17],
+  ["澳门","Macau","中国",22.20,113.54],
+  ["台北","Taipei","中国台湾",25.05,121.53],
+  ["高雄","Kaohsiung","中国台湾",22.62,120.30],
+  ["东京","Tokyo","日本",35.69,139.69],
+  ["大阪","Osaka","日本",34.69,135.50],
+  ["名古屋","Nagoya","日本",35.18,136.91],
+  ["福冈","Fukuoka","日本",33.60,130.42],
+  ["札幌","Sapporo","日本",43.06,141.35],
+  ["京都","Kyoto","日本",35.01,135.77],
+  ["神户","Kobe","日本",34.69,135.19],
+  ["首尔","Seoul","韩国",37.57,126.98],
+  ["釜山","Busan","韩国",35.10,129.04],
+  ["仁川","Incheon","韩国",37.46,126.71],
+  ["平壤","Pyongyang","朝鲜",39.02,125.75],
+  ["蒙古乌兰巴托","Ulaanbaatar","蒙古",47.91,106.92],
+  // 东南亚
+  ["新加坡","Singapore","新加坡",1.35,103.82],
+  ["吉隆坡","Kuala Lumpur","马来西亚",3.14,101.69],
+  ["曼谷","Bangkok","泰国",13.75,100.52],
+  ["雅加达","Jakarta","印度尼西亚",-6.21,106.85],
+  ["马尼拉","Manila","菲律宾",14.60,120.98],
+  ["河内","Hanoi","越南",21.03,105.85],
+  ["胡志明市","Ho Chi Minh City","越南",10.82,106.63],
+  ["仰光","Yangon","缅甸",16.87,96.19],
+  ["金边","Phnom Penh","柬埔寨",11.56,104.93],
+  ["万象","Vientiane","老挝",17.97,102.60],
+  ["巴厘岛","Bali (Denpasar)","印度尼西亚",-8.65,115.22],
+  ["泗水","Surabaya","印度尼西亚",-7.25,112.75],
+  ["棉兰","Medan","印度尼西亚",3.59,98.68],
+  ["宿务","Cebu","菲律宾",10.32,123.90],
+  ["达沃","Davao","菲律宾",7.07,125.61],
+  // 南亚
+  ["孟买","Mumbai","印度",19.08,72.88],
+  ["德里","Delhi","印度",28.66,77.23],
+  ["班加罗尔","Bangalore","印度",12.97,77.59],
+  ["加尔各答","Kolkata","印度",22.57,88.37],
+  ["海得拉巴","Hyderabad","印度",17.38,78.49],
+  ["金奈","Chennai","印度",13.08,80.27],
+  ["艾哈迈达巴德","Ahmedabad","印度",23.03,72.58],
+  ["卡拉奇","Karachi","巴基斯坦",24.86,67.01],
+  ["拉合尔","Lahore","巴基斯坦",31.56,74.35],
+  ["伊斯兰堡","Islamabad","巴基斯坦",33.72,73.06],
+  ["达卡","Dhaka","孟加拉国",23.72,90.41],
+  ["科伦坡","Colombo","斯里兰卡",6.93,79.85],
+  ["加德满都","Kathmandu","尼泊尔",27.72,85.32],
+  // 中亚 / 西亚
+  ["德黑兰","Tehran","伊朗",35.69,51.42],
+  ["迪拜","Dubai","阿联酋",25.20,55.27],
+  ["阿布扎比","Abu Dhabi","阿联酋",24.47,54.37],
+  ["利雅得","Riyadh","沙特阿拉伯",24.69,46.72],
+  ["吉达","Jeddah","沙特阿拉伯",21.54,39.17],
+  ["科威特城","Kuwait City","科威特",29.37,47.98],
+  ["多哈","Doha","卡塔尔",25.29,51.53],
+  ["巴格达","Baghdad","伊拉克",33.34,44.40],
+  ["安卡拉","Ankara","土耳其",39.93,32.85],
+  ["伊斯坦布尔","Istanbul","土耳其",41.01,28.95],
+  ["特拉维夫","Tel Aviv","以色列",32.08,34.78],
+  ["耶路撒冷","Jerusalem","以色列",31.77,35.22],
+  ["安曼","Amman","约旦",31.95,35.93],
+  ["贝鲁特","Beirut","黎巴嫩",33.89,35.50],
+  ["大马士革","Damascus","叙利亚",33.51,36.29],
+  ["阿什哈巴德","Ashgabat","土库曼斯坦",37.95,58.38],
+  ["塔什干","Tashkent","乌兹别克斯坦",41.30,69.27],
+  ["阿拉木图","Almaty","哈萨克斯坦",43.25,76.95],
+  ["努尔苏丹","Nur-Sultan","哈萨克斯坦",51.18,71.45],
+  ["喀布尔","Kabul","阿富汗",34.53,69.17],
+  ["巴库","Baku","阿塞拜疆",40.41,49.87],
+  ["第比利斯","Tbilisi","格鲁吉亚",41.69,44.83],
+  ["埃里温","Yerevan","亚美尼亚",40.18,44.51],
+  ["叶卡捷琳堡","Yekaterinburg","俄罗斯",56.84,60.60],
+  ["新西伯利亚","Novosibirsk","俄罗斯",55.03,82.92],
+  // 欧洲
+  ["伦敦","London","英国",51.51,-0.13],
+  ["巴黎","Paris","法国",48.85,2.35],
+  ["柏林","Berlin","德国",52.52,13.41],
+  ["马德里","Madrid","西班牙",40.42,-3.70],
+  ["罗马","Rome","意大利",41.90,12.49],
+  ["阿姆斯特丹","Amsterdam","荷兰",52.37,4.90],
+  ["布鲁塞尔","Brussels","比利时",50.85,4.35],
+  ["维也纳","Vienna","奥地利",48.21,16.37],
+  ["苏黎世","Zurich","瑞士",47.38,8.54],
+  ["斯德哥尔摩","Stockholm","瑞典",59.33,18.07],
+  ["奥斯陆","Oslo","挪威",59.91,10.75],
+  ["哥本哈根","Copenhagen","丹麦",55.68,12.57],
+  ["赫尔辛基","Helsinki","芬兰",60.17,24.94],
+  ["华沙","Warsaw","波兰",52.23,21.01],
+  ["布拉格","Prague","捷克",50.08,14.44],
+  ["布达佩斯","Budapest","匈牙利",47.50,19.04],
+  ["基辅","Kyiv","乌克兰",50.45,30.52],
+  ["莫斯科","Moscow","俄罗斯",55.75,37.62],
+  ["圣彼得堡","Saint Petersburg","俄罗斯",59.95,30.32],
+  ["伊斯坦布尔","Istanbul","土耳其",41.01,28.95],
+  ["雅典","Athens","希腊",37.98,23.73],
+  ["里斯本","Lisbon","葡萄牙",38.72,-9.14],
+  ["巴塞罗那","Barcelona","西班牙",41.39,2.15],
+  ["米兰","Milan","意大利",45.46,9.19],
+  ["那不勒斯","Naples","意大利",40.85,14.27],
+  ["里昂","Lyon","法国",45.75,4.84],
+  ["法兰克福","Frankfurt","德国",50.11,8.68],
+  ["汉堡","Hamburg","德国",53.55,10.00],
+  ["慕尼黑","Munich","德国",48.14,11.58],
+  ["鹿特丹","Rotterdam","荷兰",51.92,4.48],
+  ["都柏林","Dublin","爱尔兰",53.33,-6.25],
+  ["爱丁堡","Edinburgh","英国",55.95,-3.19],
+  ["曼彻斯特","Manchester","英国",53.48,-2.24],
+  ["里加","Riga","拉脱维亚",56.95,24.11],
+  ["塔林","Tallinn","爱沙尼亚",59.44,24.75],
+  ["维尔纽斯","Vilnius","立陶宛",54.69,25.28],
+  ["明斯克","Minsk","白俄罗斯",53.90,27.57],
+  ["布加勒斯特","Bucharest","罗马尼亚",44.43,26.10],
+  ["索菲亚","Sofia","保加利亚",42.70,23.32],
+  ["萨格勒布","Zagreb","克罗地亚",45.81,15.97],
+  ["贝尔格莱德","Belgrade","塞尔维亚",44.80,20.46],
+  ["萨拉热窝","Sarajevo","波斯尼亚",43.85,18.38],
+  ["斯科普里","Skopje","北马其顿",42.00,21.43],
+  ["蒂拉纳","Tirana","阿尔巴尼亚",41.33,19.82],
+  ["卢布尔雅那","Ljubljana","斯洛文尼亚",46.05,14.51],
+  ["布拉迪斯拉发","Bratislava","斯洛伐克",48.15,17.12],
+  ["雷克雅未克","Reykjavik","冰岛",64.14,-21.94],
+  // 非洲
+  ["开罗","Cairo","埃及",30.04,31.24],
+  ["拉各斯","Lagos","尼日利亚",6.46,3.39],
+  ["约翰内斯堡","Johannesburg","南非",-26.20,28.04],
+  ["开普敦","Cape Town","南非",-33.93,18.42],
+  ["内罗毕","Nairobi","肯尼亚",-1.29,36.82],
+  ["亚的斯亚贝巴","Addis Ababa","埃塞俄比亚",9.03,38.74],
+  ["喀土穆","Khartoum","苏丹",15.55,32.53],
+  ["达累斯萨拉姆","Dar es Salaam","坦桑尼亚",-6.80,39.28],
+  ["卡萨布兰卡","Casablanca","摩洛哥",33.59,-7.62],
+  ["阿尔及尔","Algiers","阿尔及利亚",36.74,3.06],
+  ["的黎波里","Tripoli","利比亚",32.90,13.18],
+  ["突尼斯","Tunis","突尼斯",36.82,10.17],
+  ["阿克拉","Accra","加纳",5.56,-0.20],
+  ["达喀尔","Dakar","塞内加尔",14.72,-17.47],
+  ["阿比让","Abidjan","科特迪瓦",5.35,-4.00],
+  ["哈拉雷","Harare","津巴布韦",-17.83,31.05],
+  ["卢萨卡","Lusaka","赞比亚",-15.42,28.28],
+  ["马普托","Maputo","莫桑比克",-25.97,32.59],
+  ["安塔那那利佛","Antananarivo","马达加斯加",-18.91,47.54],
+  ["坎帕拉","Kampala","乌干达",0.32,32.58],
+  ["金沙萨","Kinshasa","刚果（金）",-4.32,15.32],
+  ["拉各斯","Lagos","尼日利亚",6.46,3.39],
+  ["班珠尔","Banjul","冈比亚",13.45,-16.58],
+  // 北美
+  ["纽约","New York","美国",40.71,-74.01],
+  ["洛杉矶","Los Angeles","美国",34.05,-118.24],
+  ["芝加哥","Chicago","美国",41.85,-87.65],
+  ["休斯顿","Houston","美国",29.76,-95.37],
+  ["凤凰城","Phoenix","美国",33.45,-112.07],
+  ["费城","Philadelphia","美国",39.95,-75.17],
+  ["圣安东尼奥","San Antonio","美国",29.42,-98.49],
+  ["旧金山","San Francisco","美国",37.77,-122.42],
+  ["西雅图","Seattle","美国",47.61,-122.33],
+  ["迈阿密","Miami","美国",25.77,-80.19],
+  ["波士顿","Boston","美国",42.36,-71.06],
+  ["亚特兰大","Atlanta","美国",33.75,-84.39],
+  ["达拉斯","Dallas","美国",32.78,-96.80],
+  ["丹佛","Denver","美国",39.74,-104.98],
+  ["明尼阿波利斯","Minneapolis","美国",44.98,-93.27],
+  ["底特律","Detroit","美国",42.33,-83.05],
+  ["华盛顿","Washington D.C.","美国",38.91,-77.02],
+  ["拉斯维加斯","Las Vegas","美国",36.17,-115.14],
+  ["波特兰","Portland","美国",45.52,-122.68],
+  ["圣地亚哥","San Diego","美国",32.72,-117.15],
+  ["夏威夷檀香山","Honolulu","美国",21.31,-157.86],
+  ["安克雷奇","Anchorage","美国",61.22,-149.90],
+  ["多伦多","Toronto","加拿大",43.65,-79.38],
+  ["蒙特利尔","Montreal","加拿大",45.51,-73.55],
+  ["温哥华","Vancouver","加拿大",49.25,-123.12],
+  ["卡尔加里","Calgary","加拿大",51.05,-114.08],
+  ["渥太华","Ottawa","加拿大",45.42,-75.70],
+  ["墨西哥城","Mexico City","墨西哥",19.43,-99.13],
+  ["瓜达拉哈拉","Guadalajara","墨西哥",20.67,-103.35],
+  ["蒙特雷","Monterrey","墨西哥",25.67,-100.31],
+  ["哈瓦那","Havana","古巴",23.13,-82.38],
+  ["圣胡安","San Juan","波多黎各",18.47,-66.11],
+  ["危地马拉城","Guatemala City","危地马拉",14.64,-90.51],
+  ["巴拿马城","Panama City","巴拿马",8.99,-79.52],
+  // 南美
+  ["圣保罗","São Paulo","巴西",-23.55,-46.63],
+  ["里约热内卢","Rio de Janeiro","巴西",-22.91,-43.17],
+  ["布宜诺斯艾利斯","Buenos Aires","阿根廷",-34.61,-58.38],
+  ["利马","Lima","秘鲁",-12.05,-77.04],
+  ["波哥大","Bogotá","哥伦比亚",4.71,-74.07],
+  ["圣地亚哥","Santiago","智利",-33.46,-70.65],
+  ["加拉加斯","Caracas","委内瑞拉",10.48,-66.88],
+  ["基多","Quito","厄瓜多尔",-0.23,-78.52],
+  ["蒙得维的亚","Montevideo","乌拉圭",-34.90,-56.19],
+  ["拉巴斯","La Paz","玻利维亚",-16.50,-68.15],
+  ["亚松森","Asunción","巴拉圭",-25.29,-57.65],
+  ["福塔雷萨","Fortaleza","巴西",-3.72,-38.54],
+  ["萨尔瓦多","Salvador","巴西",-12.97,-38.50],
+  ["马瑙斯","Manaus","巴西",-3.10,-60.02],
+  ["贝伦","Belém","巴西",-1.46,-48.50],
+  // 大洋洲
+  ["悉尼","Sydney","澳大利亚",-33.87,151.21],
+  ["墨尔本","Melbourne","澳大利亚",-37.81,144.96],
+  ["布里斯班","Brisbane","澳大利亚",-27.47,153.03],
+  ["珀斯","Perth","澳大利亚",-31.95,115.86],
+  ["阿德莱德","Adelaide","澳大利亚",-34.93,138.60],
+  ["奥克兰","Auckland","新西兰",-36.85,174.77],
+  ["惠灵顿","Wellington","新西兰",-41.29,174.78],
+  ["苏瓦","Suva","斐济",-18.14,178.44],
+  ["努美阿","Nouméa","新喀里多尼亚",-22.27,166.46],
+  ["帕皮提","Papeete","法属波利尼西亚",-17.53,-149.57],
+];
+
+const W = 900, H = 460;
+const svg = d3.select('#mapSvg');
+const projection = d3.geoEquirectangular().scale(W/(2*Math.PI)).translate([W/2,H/2]);
+const pathGen = d3.geoPath(projection);
+
+const layers = {};
+['ocean','land','night','terminator','cities','marker'].forEach(n => {
+  layers[n] = svg.append('g').attr('class', n);
+});
+layers.ocean.append('rect').attr('width',W).attr('height',H).attr('fill','#0a1520');
+
+let selectedPoint = null;
+
+const MONTHS_CN = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+const DAYS_IN_MONTH = [31,28,31,30,31,30,31,31,30,31,30,31];
+
+function dayOfYear(m,d) {
+  let n=0; for(let i=1;i<m;i++) n+=DAYS_IN_MONTH[i-1]; return n+d;
+}
+function sunDecl(m,d) {
+  const N = dayOfYear(m,d);
+  return -23.45 * Math.cos(2*Math.PI/365*(N+10)) * Math.PI/180;
+}
+function daylightH(latDeg, decl) {
+  const lat = latDeg*Math.PI/180;
+  const cosH = -Math.tan(lat)*Math.tan(decl);
+  if(cosH<=-1) return 24;
+  if(cosH>=1) return 0;
+  return 2*Math.acos(cosH)*180/Math.PI/15;
+}
+function termPts(decl, utcH) {
+  const sLon = -(utcH/24)*360+180;
+  const pts=[];
+  for(let lon=-180;lon<=180;lon+=0.5){
+    const lonRad=(lon-sLon)*Math.PI/180;
+    const lat=Math.atan(-Math.cos(lonRad)/Math.tan(decl))*180/Math.PI;
+    pts.push([lon,lat]);
+  }
+  return pts;
+}
+function nightPoly(decl, utcH) {
+  const tp = termPts(decl,utcH);
+  const coords=[];
+  if(decl<0){
+    coords.push([-180,90]);
+    for(let i=tp.length-1;i>=0;i--) coords.push(tp[i]);
+    coords.push([180,90]);
+  } else {
+    coords.push([-180,-90]);
+    for(let i=0;i<tp.length;i++) coords.push(tp[i]);
+    coords.push([180,-90]);
+  }
+  return {type:'Feature',geometry:{type:'Polygon',coordinates:[coords]}};
+}
+function haversine(lat1,lon1,lat2,lon2) {
+  const R=6371, dLat=(lat2-lat1)*Math.PI/180, dLon=(lon2-lon1)*Math.PI/180;
+  const a=Math.sin(dLat/2)**2+Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+function nearestCity(lon,lat) {
+  let best=null, bestD=Infinity;
+  CITIES.forEach(c => {
+    const d=haversine(lat,lon,c[3],c[4]);
+    if(d<bestD){bestD=d;best=c;}
+  });
+  return bestD<400 ? {city:best, dist:bestD} : null;
+}
+function formatH(h) {
+  const hh=Math.floor(h), mm=Math.round((h-hh)*60);
+  return `${hh}h ${String(mm).padStart(2,'0')}m`;
+}
+function solarTime(latDeg, decl, isRise) {
+  const lat=latDeg*Math.PI/180;
+  const cosH=-Math.tan(lat)*Math.tan(decl);
+  if(cosH<=-1||cosH>=1) return null;
+  const H=Math.acos(cosH)*180/Math.PI/15;
+  const t = isRise ? 12-H : 12+H;
+  const hh=Math.floor(t), mm=Math.round((t-hh)*60);
+  return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+}
+
+// ── 城市点渲染 ──
+function drawCityDots() {
+  layers.cities.selectAll('*').remove();
+  CITIES.forEach(c => {
+    const p = projection([c[4],c[3]]);
+    if(!p) return;
+    // 透明大圆用于触摸热区
+    layers.cities.append('circle')
+      .attr('cx',p[0]).attr('cy',p[1]).attr('r',8)
+      .attr('fill','transparent')
+      .attr('stroke','none')
+      .style('cursor','pointer')
+      .on('mouseenter', function(event) {
+        dot.attr('r',4).attr('fill','#f5a623');
+        showTooltip(event, c[0]+' '+c[1]);
+      })
+      .on('mouseleave', function() {
+        dot.attr('r',2).attr('fill','rgba(255,255,255,0.35)');
+        hideTooltip();
+      })
+      .on('click', function(event) {
+        event.stopPropagation();
+        selectLocation(c[4],c[3],c);
+      });
+    // 可见小圆
+    const dot = layers.cities.append('circle')
+      .attr('cx',p[0]).attr('cy',p[1]).attr('r',2)
+      .attr('fill','rgba(255,255,255,0.35)')
+      .attr('stroke','none')
+      .attr('class','city-dot')
+      .attr('data-cn',c[0]).attr('data-en',c[1]).attr('data-country',c[2])
+      .attr('data-lat',c[3]).attr('data-lon',c[4])
+      .style('cursor','pointer')
+      .style('pointer-events','none'); // 让热区圆处理事件
+  });
+}
+
+// ── 简易tooltip ──
+let tooltip = null;
+function showTooltip(event, text) {
+  if(!tooltip){
+    tooltip = document.createElement('div');
+    tooltip.style.cssText='position:fixed;background:#1e2d3d;color:#c8daf0;font-size:12px;padding:4px 8px;border-radius:4px;pointer-events:none;z-index:999;border:1px solid #2e3d4d;';
+    document.body.appendChild(tooltip);
+  }
+  tooltip.textContent=text;
+  tooltip.style.display='block';
+  tooltip.style.left=(event.clientX+12)+'px';
+  tooltip.style.top=(event.clientY-10)+'px';
+}
+function hideTooltip() { if(tooltip) tooltip.style.display='none'; }
+
+// ── 选中地点 ──
+function selectLocation(lon, lat, cityObj) {
+  selectedPoint=[lon,lat];
+  layers.marker.selectAll('*').remove();
+  const p=projection([lon,lat]);
+  layers.marker.append('circle').attr('cx',p[0]).attr('cy',p[1]).attr('r',8)
+    .attr('fill','none').attr('stroke','#f5a623').attr('stroke-width',2);
+  layers.marker.append('circle').attr('cx',p[0]).attr('cy',p[1]).attr('r',3)
+    .attr('fill','#f5a623');
+  const m=+document.getElementById('monthSlider').value;
+  const d=Math.min(+document.getElementById('daySlider').value,DAYS_IN_MONTH[m-1]);
+  updateSidebar(lon,lat,m,d,cityObj);
+}
+
+function updateSidebar(lon, lat, month, day, cityObj) {
+  const decl=sunDecl(month,day);
+  const dayH=daylightH(lat,decl);
+  const nightH=24-dayH;
+  const dayPct=(dayH/24*100);
+  const isPolarDay=dayH>=24, isPolarNight=dayH<=0;
+
+  const rise=solarTime(lat,decl,true);
+  const set=solarTime(lat,decl,false);
+
+  const latStr=lat>=0?lat.toFixed(2)+'°N':Math.abs(lat).toFixed(2)+'°S';
+  const lonStr=lon>=0?lon.toFixed(2)+'°E':Math.abs(lon).toFixed(2)+'°W';
+
+  const yearData=[];
+  for(let m=1;m<=12;m++) yearData.push(daylightH(lat,sunDecl(m,15)));
+
+  const card=document.getElementById('locationCard');
+  const cityName = cityObj ? `<div class="city-title">${cityObj[0]}</div><div class="city-sub">${cityObj[1]} · ${cityObj[2]}</div>` :
+    `<div class="city-title">${latStr}</div><div class="city-sub">${lonStr}</div>`;
+  const coordLine = cityObj ? `<div class="city-sub" style="margin-top:-6px;margin-bottom:10px;">${latStr} ${lonStr}</div>` : '';
+
+  card.innerHTML=`
+    <h3>选中地点</h3>
+    ${cityName}${coordLine}
+    <div class="daynight-bar">
+      <div class="bar-day" style="width:${dayPct.toFixed(1)}%">${dayH>=3?Math.round(dayH)+'h':''}</div>
+      <div class="bar-night" style="width:${(100-dayPct).toFixed(1)}%">${nightH>=3?Math.round(nightH)+'h':''}</div>
+    </div>
+    <div style="margin-bottom:8px;font-size:11px;color:#5a7a9a;">${MONTHS_CN[month-1]}${day}日</div>
+    <div class="stat-row"><span class="stat-label">昼长</span>
+      <span class="stat-val hi">${isPolarDay?'24h（极昼）':isPolarNight?'—（极夜）':formatH(dayH)}</span></div>
+    <div class="stat-row"><span class="stat-label">夜长</span>
+      <span class="stat-val">${isPolarNight?'24h（极夜）':isPolarDay?'—（极昼）':formatH(nightH)}</span></div>
+    <div class="stat-row"><span class="stat-label">日出（太阳时）</span>
+      <span class="stat-val">${isPolarDay?'——':isPolarNight?'——':rise||'——'}</span></div>
+    <div class="stat-row"><span class="stat-label">日落（太阳时）</span>
+      <span class="stat-val">${isPolarDay?'——':isPolarNight?'——':set||'——'}</span></div>
+    <div style="margin-top:14px;margin-bottom:6px;font-size:11px;color:#5a7a9a;text-transform:uppercase;letter-spacing:0.06em;">全年昼长变化</div>
+    <canvas id="yearCanvas" style="width:100%;height:110px;display:block;"></canvas>
+    <div style="display:flex;justify-content:space-between;font-size:10px;color:#3a5a7a;margin-top:2px;"><span>1月</span><span>4月</span><span>7月</span><span>10月</span><span>12月</span></div>
+  `;
+  requestAnimationFrame(()=>drawYearChart(yearData,month-1,dayH));
+}
+
+function drawYearChart(yearData, curIdx, curDayH) {
+  const canvas=document.getElementById('yearCanvas');
+  if(!canvas) return;
+  // 响应式：用实际渲染宽度
+  const displayW=canvas.offsetWidth||224;
+  canvas.width=displayW; canvas.height=110;
+  const ctx=canvas.getContext('2d');
+  const W=canvas.width, H=canvas.height;
+  const pad={top:8,right:6,bottom:4,left:26};
+
+  ctx.clearRect(0,0,W,H);
+
+  // grid
+  [0,6,12,18,24].forEach(v=>{
+    const y=pad.top+(1-v/24)*(H-pad.top-pad.bottom);
+    ctx.strokeStyle='rgba(255,255,255,0.07)'; ctx.lineWidth=0.5;
+    ctx.beginPath(); ctx.moveTo(pad.left,y); ctx.lineTo(W-pad.right,y); ctx.stroke();
+    ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.font='9px sans-serif';
+    ctx.fillText(v,0,y+3);
+  });
+
+  const xs=i=>pad.left+(i/11)*(W-pad.left-pad.right);
+  const ys=v=>pad.top+(1-Math.min(v,24)/24)*(H-pad.top-pad.bottom);
+
+  // fill
+  const grad=ctx.createLinearGradient(0,pad.top,0,H-pad.bottom);
+  grad.addColorStop(0,'rgba(55,138,221,0.35)');
+  grad.addColorStop(1,'rgba(55,138,221,0.03)');
+  ctx.beginPath();
+  yearData.forEach((v,i)=>{ if(i===0) ctx.moveTo(xs(i),ys(v)); else ctx.lineTo(xs(i),ys(v)); });
+  ctx.lineTo(xs(11),H-pad.bottom); ctx.lineTo(xs(0),H-pad.bottom);
+  ctx.closePath(); ctx.fillStyle=grad; ctx.fill();
+
+  // line
+  ctx.beginPath(); ctx.strokeStyle='#378add'; ctx.lineWidth=1.5;
+  yearData.forEach((v,i)=>{ if(i===0) ctx.moveTo(xs(i),ys(v)); else ctx.lineTo(xs(i),ys(v)); });
+  ctx.stroke();
+
+  // current dot
+  ctx.beginPath(); ctx.arc(xs(curIdx),ys(yearData[curIdx]),4,0,Math.PI*2);
+  ctx.fillStyle='#f5a623'; ctx.fill();
+
+  // vertical dashed
+  ctx.strokeStyle='rgba(245,166,35,0.4)'; ctx.lineWidth=1; ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.moveTo(xs(curIdx),pad.top); ctx.lineTo(xs(curIdx),H-pad.bottom); ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+// ── 主渲染 ──
+function render() {
+  const month=+document.getElementById('monthSlider').value;
+  const maxD=DAYS_IN_MONTH[month-1];
+  const daySlider=document.getElementById('daySlider');
+  daySlider.max=maxD;
+  if(+daySlider.value>maxD) daySlider.value=maxD;
+  const day=+daySlider.value;
+  const hour=+document.getElementById('hourSlider').value;
+
+  document.getElementById('monthLabel').textContent=MONTHS_CN[month-1];
+  document.getElementById('dayLabel').textContent=day+'日';
+  document.getElementById('hourLabel').textContent=String(hour).padStart(2,'0')+':00';
+
+  const decl=sunDecl(month,day);
+  const declDeg=(decl*180/Math.PI).toFixed(2);
+  document.getElementById('declLabel').textContent=`赤纬 ${declDeg>0?'+':''}${declDeg}°`;
+
+  layers.night.selectAll('*').remove();
+  layers.terminator.selectAll('*').remove();
+
+  layers.night.append('path').datum(nightPoly(decl,hour))
+    .attr('d',pathGen).attr('fill','rgba(0,5,20,0.74)');
+
+  const tp=termPts(decl,hour);
+  const lpd=tp.map(p=>projection(p));
+  layers.terminator.append('path')
+    .attr('d','M'+lpd.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join('L'))
+    .attr('stroke','#f5a623').attr('stroke-width',2).attr('fill','none');
+
+  const sLon=((-(hour/24)*360+180)+180)%360-180;
+  const sunPos=projection([sLon,decl*180/Math.PI]);
+  if(sunPos) {
+    layers.terminator.append('circle')
+      .attr('cx',sunPos[0]).attr('cy',sunPos[1]).attr('r',7)
+      .attr('fill','#FFD700').attr('stroke','#f5a623').attr('stroke-width',2);
+  }
+
+  if(selectedPoint) {
+    const near=nearestCity(selectedPoint[0],selectedPoint[1]);
+    updateSidebar(selectedPoint[0],selectedPoint[1],month,day,near?near.city:null);
+  }
+}
+
+// ── 地图点击 ──
+function handleMapClick(event) {
+  const svgEl=document.getElementById('mapSvg');
+  const bbox=svgEl.getBoundingClientRect();
+  // 将屏幕坐标精确映射到SVG viewBox坐标
+  const scaleX=W/bbox.width, scaleY=H/bbox.height;
+  let clientX, clientY;
+  if(event.touches && event.touches.length>0) {
+    clientX=event.touches[0].clientX; clientY=event.touches[0].clientY;
+  } else if(event.changedTouches && event.changedTouches.length>0) {
+    clientX=event.changedTouches[0].clientX; clientY=event.changedTouches[0].clientY;
+  } else {
+    clientX=event.clientX; clientY=event.clientY;
+  }
+  const svgX=(clientX-bbox.left)*scaleX;
+  const svgY=(clientY-bbox.top)*scaleY;
+  const coords=projection.invert([svgX,svgY]);
+  if(!coords) return;
+  const [lon,lat]=coords;
+  if(lat<-90||lat>90||lon<-180||lon>180) return;
+  const near=nearestCity(lon,lat);
+  selectLocation(near?near.city[4]:lon, near?near.city[3]:lat, near?near.city:null);
+}
+svg.on('click', handleMapClick);
+document.getElementById('mapSvg').addEventListener('touchend', function(e){
+  e.preventDefault(); handleMapClick(e);
+}, {passive:false});
+
+// ── 搜索 ──
+const searchInput=document.getElementById('searchInput');
+const searchDropdown=document.getElementById('searchDropdown');
+
+searchInput.addEventListener('input', function() {
+  const q=this.value.trim().toLowerCase();
+  if(!q){ searchDropdown.classList.remove('open'); return; }
+  const results=CITIES.filter(c=>
+    c[0].includes(this.value.trim()) ||
+    c[1].toLowerCase().includes(q) ||
+    c[2].includes(this.value.trim())
+  ).slice(0,12);
+  if(!results.length){ searchDropdown.classList.remove('open'); return; }
+  searchDropdown.innerHTML=results.map((c,i)=>
+    `<div class="search-item" data-idx="${i}" data-lon="${c[4]}" data-lat="${c[3]}" data-i="${CITIES.indexOf(c)}">
+      <span class="city-cn">${c[0]}</span><span class="city-en">${c[1]}</span>
+      <span class="city-country">${c[2]}</span>
+    </div>`
+  ).join('');
+  searchDropdown.classList.add('open');
+  searchDropdown.querySelectorAll('.search-item').forEach(el=>{
+    el.addEventListener('click',()=>{
+      const lon=+el.dataset.lon, lat=+el.dataset.lat, idx=+el.dataset.i;
+      searchInput.value=CITIES[idx][0]+' '+CITIES[idx][1];
+      searchDropdown.classList.remove('open');
+      selectLocation(lon,lat,CITIES[idx]);
+    });
+  });
+});
+
+document.addEventListener('click', e=>{
+  if(!e.target.closest('.search-wrap')) searchDropdown.classList.remove('open');
+});
+
+['monthSlider','daySlider','hourSlider'].forEach(id=>{
+  document.getElementById(id).addEventListener('input',render);
+});
+
+// ── 加载地图 ──
+d3.json('https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json').then(world=>{
+  const land=topojson.feature(world,world.objects.countries);
+  layers.land.selectAll('path').data(land.features).join('path')
+    .attr('d',pathGen)
+    .attr('fill','#1e3d2e')
+    .attr('stroke','rgba(255,255,255,0.15)')
+    .attr('stroke-width',0.4);
+
+  // 经纬网
+  const gridG=svg.insert('g','.night');
+  [-60,-30,0,30,60].forEach(lat=>{
+    const pts=d3.range(-180,181,2).map(lon=>projection([lon,lat]));
+    gridG.append('path').attr('d','M'+pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join('L'))
+      .attr('stroke',lat===0?'rgba(255,210,80,0.15)':'rgba(255,255,255,0.05)')
+      .attr('stroke-width',lat===0?1:0.5).attr('fill','none');
+  });
+  [-120,-60,0,60,120].forEach(lon=>{
+    const pts=d3.range(-90,91,2).map(lat=>projection([lon,lat]));
+    gridG.append('path').attr('d','M'+pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join('L'))
+      .attr('stroke','rgba(255,255,255,0.05)').attr('stroke-width',0.5).attr('fill','none');
+  });
+
+  drawCityDots();
+  render();
+});
+</script>
+</body>
+</html>
